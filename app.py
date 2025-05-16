@@ -16,7 +16,8 @@ from utils import (
     analyze_with_llm,
     compare_stocks,
     suggest_portfolio_allocation,
-    load_model
+    load_model,
+    get_available_models
 )
 
 # Load environment variables
@@ -58,6 +59,20 @@ st.markdown("""
         margin-top: 1rem;
         margin-bottom: 1rem;
     }
+    /* Streamlit radio button styling */
+    div.stRadio > div {
+        padding-top: 0.3rem;
+        padding-bottom: 0.3rem;
+    }
+    div.stRadio label {
+        font-weight: bold;
+        font-size: 1.05rem;
+    }
+    /* Reduce spacing between elements */
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,27 +80,80 @@ st.markdown("""
 st.markdown('<h1 class="main-header">Indian Stock Market Analyzer</h1>', unsafe_allow_html=True)
 st.markdown('Analyze BSE and NSE stocks with AI-powered insights to maximize your investment profits')
 
+# Get available models
+available_models = get_available_models()
+
+# Initialize session state for selected model
+if 'selected_model' not in st.session_state:
+    st.session_state.selected_model = "phi-2"  # Default model
+
 # Model configuration in sidebar
 st.sidebar.markdown('## AI Model Settings')
-model_info = st.sidebar.expander("About Deepseek AI Model", expanded=False)
-with model_info:
-    st.markdown("""
-    This app uses the Deepseek Coder 6.7B model for analysis. This is a free open-source LLM that runs locally on your machine.
+
+# Group models by size category
+small_models = ["tinyllama-1.1b", "deepseek-coder-1.3b"]
+medium_models = ["phi-2", "stablelm-zephyr-3b"]
+large_models = ["llama3-8b", "deepseek-coder-6.7b"]
+
+# Create model selection with categories
+st.sidebar.markdown("### Select Analysis Model")
+
+# Category-based selection
+model_category = st.sidebar.radio(
+    "Model Size",
+    ["Small (4GB+ RAM)", "Medium (6GB+ RAM)", "Large (16GB+ RAM)"],
+    index=1,  # Default to medium models
+    help="Select model size based on your system capabilities"
+)
+
+# Get appropriate model options based on category
+if model_category == "Small (4GB+ RAM)":
+    category_models = small_models
+elif model_category == "Large (16GB+ RAM)":
+    category_models = large_models
+else:  # Medium models as default
+    category_models = medium_models
+
+# Model selection within category
+selected_model = st.sidebar.selectbox(
+    "Model",
+    options=category_models,
+    index=0,
+    format_func=lambda x: f"{x} - {available_models[x]['description']}"
+)
+
+# Show model details
+model_info = available_models[selected_model]
+st.sidebar.info(f"""
+**{selected_model}**  
+{model_info['description']}  
+**System Requirements:** {model_info['ram_required']}
+""")
+
+# Update session state
+if selected_model != st.session_state.selected_model:
+    st.session_state.selected_model = selected_model
+
+# Model details expander
+with st.sidebar.expander("About Selected Model", expanded=False):
+    st.markdown(f"""
+    **Model**: {model_info['id']}
     
-    **Model Details:**
-    - Model: deepseek-ai/deepseek-coder-6.7b-instruct
-    - Runs locally (no API costs)
-    - First analysis may take time to load the model
-    - Hardware requirements: 16GB+ RAM, GPU recommended
+    **Description**: {model_info['description']}
     
-    If you experience performance issues, you can modify the MODEL_ID variable in utils.py to use a smaller model.
+    **System Requirements**: {model_info['ram_required']} RAM
+    
+    **Format**: {model_info['format']}
+    
+    This model will be downloaded and run locally on your machine.
+    The first analysis may take time to download and load the model.
     """)
 
 # Pre-load model option
-if st.sidebar.button("Pre-load AI Model"):
-    with st.spinner("Loading Deepseek model... This may take a few minutes depending on your hardware..."):
+if st.sidebar.button("Pre-load Selected Model"):
+    with st.spinner(f"Loading {selected_model} model... This may take a few minutes depending on your hardware..."):
         try:
-            load_model()
+            load_model(selected_model)
             st.sidebar.success("✅ Model loaded successfully!")
         except Exception as e:
             st.sidebar.error(f"❌ Error loading model: {str(e)}")
@@ -233,9 +301,11 @@ with tab1:
                 # AI Analysis section
                 st.markdown('<h3 class="sub-header">AI Analysis</h3>', unsafe_allow_html=True)
                 
+                st.info(f"Using model: **{selected_model}** - {available_models[selected_model]['description']}")
+                
                 if st.button("Generate AI Analysis"):
-                    with st.spinner("Generating analysis... This may take a few minutes on the first run as the model loads..."):
-                        analysis = analyze_with_llm(stock_info, df_with_indicators)
+                    with st.spinner(f"Generating analysis using {selected_model}... This may take a few minutes on the first run as the model loads..."):
+                        analysis = analyze_with_llm(stock_info, df_with_indicators, model_key=selected_model)
                         st.markdown(f'<div class="recommendation-box">{analysis}</div>', 
                                   unsafe_allow_html=True)
         else:
@@ -344,8 +414,10 @@ with tab3:
             else:
                 st.markdown('<h3 class="sub-header">Portfolio Analysis</h3>', unsafe_allow_html=True)
                 
+                st.info(f"Using model: **{selected_model}** - {available_models[selected_model]['description']}")
+                
                 if st.button("Generate Portfolio Recommendations"):
-                    with st.spinner("Analyzing your portfolio... This may take a few minutes..."):
+                    with st.spinner(f"Analyzing your portfolio using {selected_model}... This may take a few minutes..."):
                         # Gather analysis results for each stock
                         analysis_results = {}
                         progress_bar = st.progress(0)
@@ -360,7 +432,7 @@ with tab3:
                             df_with_indicators = calculate_technical_indicators(df)
                             
                             # Get AI analysis
-                            analysis = analyze_with_llm(stock_info, df_with_indicators)
+                            analysis = analyze_with_llm(stock_info, df_with_indicators, model_key=selected_model)
                             analysis_results[ticker] = analysis
                         
                         # Complete progress
@@ -368,7 +440,7 @@ with tab3:
                         
                         # Get portfolio allocation suggestion
                         allocation_suggestion = suggest_portfolio_allocation(
-                            valid_portfolio_tickers, analysis_results
+                            valid_portfolio_tickers, analysis_results, model_key=selected_model
                         )
                         
                         st.markdown(f'<div class="recommendation-box">{allocation_suggestion}</div>', 
@@ -439,36 +511,52 @@ with tab4:
         """)
     
     # AI Model information
-    with st.expander("About the AI Model"):
+    with st.expander("About the AI Models"):
         st.markdown("""
-        ### Deepseek AI Model
+        ### Available AI Models
 
-        This application uses the Deepseek Coder 6.7B model, which is a free open-source large language model that runs locally on your machine.
+        This application offers multiple free, open-source large language models that run locally on your machine:
         
+        **Model Options:**
+        """)
+        
+        # List all available models with details
+        for model_key, model_info in available_models.items():
+            st.markdown(f"""
+            #### {model_key}
+            - **Description**: {model_info['description']}
+            - **System Requirements**: {model_info['ram_required']} RAM
+            - **Model ID**: `{model_info['id']}`
+            """)
+        
+        st.markdown("""
         **Benefits:**
         - **Free to use**: No API costs or subscription fees
         - **Privacy**: All analysis is done locally on your machine
-        - **Customizable**: You can swap out models if needed
-        
-        **System Requirements:**
-        - Minimum: 16GB RAM, modern CPU
-        - Recommended: 32GB RAM, NVIDIA GPU with 8GB+ VRAM
+        - **Customizable**: You can choose the model that works best for your hardware
         
         **First-Time Use:**
-        The first time you run an analysis, the application will download and load the model (3-4GB). This may take a few minutes depending on your internet connection and hardware. Subsequent analyses will be faster as the model will already be loaded.
-        
-        **Model Options:**
-        If the default model is too resource-intensive for your system, you can modify the MODEL_ID in utils.py to use a smaller model like "TinyLlama/TinyLlama-1.1B-Chat-v1.0" which requires much less memory.
+        The first time you run an analysis with a specific model, the application will download and load it.
+        This may take a few minutes depending on your internet connection and hardware.
+        Subsequent analyses will be faster as the model will already be loaded.
         """)
     
     # Tips for using AI analysis
     with st.expander("Tips for Using AI Analysis"):
         st.markdown("""
-        1. **Use AI recommendations as one input**, not the sole decision maker
-        2. **Compare AI analysis with your own research** and other sources
-        3. **Consider the fundamental factors** not captured in technical analysis
-        4. **Be aware of market conditions** that may affect AI analysis accuracy
-        5. **Regularly review your portfolio** as market conditions change
+        1. **Choose the right model for your hardware**:
+           - Smaller models (1-3B parameters) work well on most computers
+           - Larger models (5B+ parameters) provide better analysis but require more RAM/GPU memory
+        
+        2. **Use AI recommendations as one input**, not the sole decision maker
+        
+        3. **Compare AI analysis with your own research** and other sources
+        
+        4. **Consider the fundamental factors** not captured in technical analysis
+        
+        5. **Be aware of market conditions** that may affect AI analysis accuracy
+        
+        6. **Regularly review your portfolio** as market conditions change
         """)
     
     # Disclaimer
@@ -480,5 +568,5 @@ with tab4:
 # Footer
 st.markdown("""
 ---
-Made with ❤️ using Streamlit, yfinance, and Deepseek | Indian Stock Market Analyzer
+Made with ❤️ using Streamlit, yfinance, and open-source LLMs | Indian Stock Market Analyzer
 """) 
