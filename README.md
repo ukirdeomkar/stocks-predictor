@@ -1,58 +1,72 @@
 # Indian Stock Market Analyzer
 
-A Streamlit application that fetches real-time data from Indian stock markets (BSE and NSE) using yfinance and provides AI-powered analysis to help maximize investment profits.
+An AI-powered Streamlit application for analyzing Indian stocks from BSE and NSE using real-time data from Yahoo Finance through the `yfinance` library. The application leverages the Hugging Face Inference API to provide AI-driven stock analysis and portfolio allocation recommendations.
 
 ## Features
 
 - Real-time stock data from BSE and NSE
-- Historical price charts and technical indicators
-- Multiple AI models to choose from for stock analysis, all running locally
-- Comparison tools for multiple stocks
-- Portfolio optimization suggestions
+- Multiple technical indicators (RSI, MACD, Bollinger Bands, etc.)
+- AI-driven stock analysis via Hugging Face's API
+- Portfolio allocation recommendations
+- Interactive visualization of stock prices and technical indicators
+- Fully responsive UI for desktop and mobile use
 
-## Setup Instructions
+## Analysis through Hugging Face API
+
+This application uses the Hugging Face Inference API to provide AI-powered stock analysis. The API offers:
+
+- **Speed**: Get analysis in seconds instead of minutes
+- **No hardware requirements**: Run powerful AI models without a high-end GPU
+- **Generous free tier**: The Hugging Face API offers a free tier with reasonable quotas
+- **Access to powerful models**: Get analysis from various AI models without downloading them
+
+The Hugging Face API is required to use this application, as it exclusively relies on API calls for AI analysis.
+
+## Available AI Models
+
+| Model | Description | Best For |
+|-------|-------------|----------|
+| deepseek-coder-6.7b | A specialized model for financial and code analysis | Detailed technical analysis |
+| mistral-7b | Well-balanced general-purpose model | Balanced analysis |
+| phi-2 | Small but efficient model with good financial understanding | Quick insights |
+| tinyllama-1.1b | Ultra-compact model for very basic analysis | Very basic summaries |
+
+## Setup
 
 1. Clone this repository
-2. Install dependencies:
+2. Install the required dependencies:
    ```
    pip install -r requirements.txt
    ```
-3. Run the Streamlit app:
-   ```
-   streamlit run app.py
-   ```
-
-## AI Models
-
-This application offers multiple free, open-source LLMs that run locally on your machine:
-
-| Model | Description | System Requirements |
-|-------|-------------|---------------------|
-| phi-2 | Microsoft's efficient model (2.7B parameters) | 6GB+ RAM |
-| tinyllama-1.1b | Very small general model (1.1B parameters) | 4GB+ RAM |
-| deepseek-coder-1.3b | Lightweight coding model (1.3B parameters) | 4GB+ RAM |
-| stablelm-zephyr-3b | Stability AI's 3B model tuned on Zephyr data | 6GB+ RAM |
-| llama3-8b | Meta's Llama 3 model (8B parameters) | 16GB+ RAM |
-| deepseek-coder-6.7b | Powerful coding model (6.7B parameters) | 16GB+ RAM |
-
-### Key Benefits
-
-- **No API costs**: Unlike OpenAI models, there are no usage fees
-- **Privacy**: All analysis is performed locally on your machine
-- **Model flexibility**: Choose the model that works best for your hardware
-
-The first analysis may take a few minutes as the selected model is downloaded and loaded. Subsequent analyses will be faster.
+3. **Setup your Hugging Face API Key (Required)**:
+   - Create a free account at [Hugging Face](https://huggingface.co/)
+   - Generate an API key from your [settings page](https://huggingface.co/settings/tokens)
+   - Create a `.env` file in the app's directory with:
+     ```
+     HUGGINGFACE_API_KEY=your_api_key_here
+     ```
 
 ## How to Use
 
-1. Select your preferred AI model from the sidebar based on your hardware capabilities
-2. Enter the stock symbols you're interested in (use the format `SYMBOL.BO` for BSE stocks and `SYMBOL.NS` for NSE stocks)
-3. Select the timeframe for analysis
-4. Choose the type of analysis you want
-5. View the results and AI-generated insights
+1. Run the application with:
+   ```
+   streamlit run app.py
+   ```
+2. Select an AI model from the dropdown in the sidebar
+3. Enter a valid BSE or NSE ticker symbol:
+   - For BSE stocks, add `.BO` suffix (e.g., `RELIANCE.BO`)
+   - For NSE stocks, add `.NS` suffix (e.g., `RELIANCE.NS`)
+4. Click "Analyze" to fetch stock data and visualize the charts
+5. Click "Generate AI Analysis" to get AI-driven insights about the stock
+6. For multi-stock analysis, enter multiple ticker symbols separated by commas
 
-## Notes
+## Important Notes
 
-- Stock market investments involve risk, always do additional research before making investment decisions
-- For optimal performance on Streamlit's free deployment tier, use the smaller models (phi-2, tinyllama-1.1b, or deepseek-coder-1.3b)
-- If using more powerful models, you may need to deploy the application on your own infrastructure 
+- The application requires a working internet connection to fetch real-time data and access the Hugging Face API
+- Stock market investments involve risk; use the analysis as one of many inputs for your investment decisions
+- The API has usage limits on the free tier; for high-volume usage, consider upgrading your Hugging Face account
+- For the best experience, select models appropriate for your analysis needs
+
+## License
+
+MIT License 

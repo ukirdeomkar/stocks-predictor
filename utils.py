@@ -1,334 +1,483 @@
 import os
-import yfinance as yf
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-import plotly.graph_objects as go
+import yfinance as yf
 from datetime import datetime, timedelta
+import requests
+import json
 from dotenv import load_dotenv
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
 # Load environment variables
 load_dotenv()
 
-# Define available models with their specifications
-AVAILABLE_MODELS = {
-    "deepseek-coder-1.3b": {
-        "id": "deepseek-ai/deepseek-coder-1.3b-instruct",
-        "description": "Lightweight coding model (1.3B parameters)",
-        "ram_required": "4GB+",
-        "format": "deepseek"
-    },
-    "tinyllama-1.1b": {
-        "id": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
-        "description": "Very small general model (1.1B parameters)",
-        "ram_required": "4GB+",
-        "format": "llama"
-    },
-    "phi-2": {
-        "id": "microsoft/phi-2",
-        "description": "Microsoft's efficient model (2.7B parameters)",
-        "ram_required": "6GB+",
-        "format": "default"
-    },
-    "stablelm-zephyr-3b": {
-        "id": "stabilityai/stablelm-zephyr-3b",
-        "description": "Stability AI's 3B model tuned on Zephyr data",
-        "ram_required": "6GB+",
-        "format": "zephyr"
-    },
-    "llama3-8b": {
-        "id": "meta-llama/Meta-Llama-3-8B-Instruct",
-        "description": "Meta's Llama 3 model (8B parameters)",
-        "ram_required": "16GB+",
-        "format": "llama"
-    },
-    "deepseek-coder-6.7b": {
-        "id": "deepseek-ai/deepseek-coder-6.7b-instruct",
-        "description": "Powerful coding model (6.7B parameters)",
-        "ram_required": "16GB+",
-        "format": "deepseek"
-    }
-}
-
-# Default model if none selected
+# Default model to use
 DEFAULT_MODEL = "phi-2"
-
-# Initialize model variables as None - will be loaded on demand
-current_model_key = None
-tokenizer = None
-model = None
 
 def get_available_models():
     """
-    Returns a dictionary of available models
+    Get a dictionary of available AI models with their descriptions and API endpoints.
+    
+    Returns:
+        dict: Dictionary of model information with keys being model names
     """
-    return AVAILABLE_MODELS
+    return {
+        "phi-2": {
+            "description": "Small but efficient model with good financial understanding",
+            "api_endpoint": "microsoft/phi-2",
+            "size": "2.7B"
+        },
+        "tinyllama-1.1b": {
+            "description": "Ultra-compact model for very basic analysis",
+            "api_endpoint": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+            "size": "1.1B"
+        },
+        "mistral-7b": {
+            "description": "Well-balanced general-purpose model with strong reasoning",
+            "api_endpoint": "mistralai/Mistral-7B-Instruct-v0.2",
+            "size": "7B"
+        },
+        "deepseek-coder-6.7b": {
+            "description": "A specialized model for financial and code analysis",
+            "api_endpoint": "deepseek-ai/deepseek-coder-6.7b-instruct",
+            "size": "6.7B"
+        }
+    }
 
-def load_model(model_key=DEFAULT_MODEL):
+def get_stock_info(ticker):
     """
-    Load the specified model and its tokenizer on demand
+    Get basic information about a stock.
     
     Args:
-        model_key (str): Key for the model to load from AVAILABLE_MODELS
-    """
-    global tokenizer, model, current_model_key
-    
-    # If the requested model is already loaded, do nothing
-    if current_model_key == model_key and tokenizer is not None and model is not None:
-        return
-    
-    # Get model info
-    if model_key not in AVAILABLE_MODELS:
-        model_key = DEFAULT_MODEL
-    
-    model_info = AVAILABLE_MODELS[model_key]
-    model_id = model_info["id"]
-    
-    print(f"Loading model: {model_id}... This may take a moment.")
-    
-    # Free up memory if another model was loaded before
-    if model is not None:
-        del model
-        torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    
-    # Load the tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        low_cpu_mem_usage=True,
-        trust_remote_code=True
-    )
-    
-    # Move model to appropriate device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.to(device)
-    
-    # Update current model key
-    current_model_key = model_key
-    
-    print(f"Model {model_id} loaded successfully!")
-    return True
-
-def validate_ticker(ticker):
-    """
-    Validate if the ticker exists and is valid for BSE or NSE
-    
-    Args:
-        ticker (str): Stock ticker symbol with .BO (BSE) or .NS (NSE) suffix
+        ticker (str): Stock ticker symbol
         
     Returns:
-        bool: True if valid, False otherwise
+        dict: Dictionary containing basic stock information
     """
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-        # Check if we got valid info back
-        if 'regularMarketPrice' in info and info['regularMarketPrice'] is not None:
-            return True
-        return False
+        
+        # Get the basics
+        stock_info = {
+            "symbol": ticker,
+            "name": info.get("longName", "Unknown"),
+            "sector": info.get("sector", "Unknown"),
+            "industry": info.get("industry", "Unknown"),
+            "current_price": info.get("currentPrice", info.get("regularMarketPrice", "Unknown")),
+            "market_cap": info.get("marketCap", "Unknown"),
+            "pe_ratio": info.get("trailingPE", "Unknown"),
+            "eps": info.get("trailingEps", "Unknown"),
+            "dividend_yield": info.get("dividendYield", "Unknown"),
+            "52_week_high": info.get("fiftyTwoWeekHigh", "Unknown"),
+            "52_week_low": info.get("fiftyTwoWeekLow", "Unknown"),
+            "avg_volume": info.get("averageVolume", "Unknown")
+        }
+        
+        # Format the values for better readability
+        for key, value in stock_info.items():
+            if key == "market_cap" and isinstance(value, (int, float)):
+                # Convert market cap to billions/millions
+                if value >= 1e9:
+                    stock_info[key] = f"₹{value/1e9:.2f}B"
+                elif value >= 1e6:
+                    stock_info[key] = f"₹{value/1e6:.2f}M"
+            elif key == "dividend_yield" and isinstance(value, (int, float)):
+                stock_info[key] = f"{value*100:.2f}%"
+            elif isinstance(value, (int, float)) and key not in ["eps", "pe_ratio"]:
+                # Format numbers with commas for thousands
+                stock_info[key] = f"{value:,}"
+                
+        return stock_info
     except Exception as e:
-        return False
+        print(f"Error getting stock info: {str(e)}")
+        return {"symbol": ticker, "error": str(e)}
 
-def get_stock_data(ticker, period="1y", interval="1d"):
+def get_stock_data(ticker, period="1y"):
     """
-    Fetch historical stock data
+    Get historical stock data with technical indicators.
     
     Args:
-        ticker (str): Stock ticker symbol with .BO (BSE) or .NS (NSE) suffix
-        period (str): Period to fetch data for (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
-        interval (str): Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
-        
-    Returns:
-        pd.DataFrame: DataFrame with stock data
-    """
-    stock = yf.Ticker(ticker)
-    df = stock.history(period=period, interval=interval)
-    return df
-
-def get_stock_info(ticker):
-    """
-    Get general information about a stock
-    
-    Args:
-        ticker (str): Stock ticker symbol with .BO (BSE) or .NS (NSE) suffix
-        
-    Returns:
-        dict: Stock information
-    """
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    
-    # Extract relevant information
-    relevant_info = {
-        'symbol': ticker,
-        'name': info.get('shortName', 'N/A'),
-        'sector': info.get('sector', 'N/A'),
-        'industry': info.get('industry', 'N/A'),
-        'current_price': info.get('currentPrice', info.get('regularMarketPrice', 'N/A')),
-        'market_cap': info.get('marketCap', 'N/A'),
-        'pe_ratio': info.get('trailingPE', 'N/A'),
-        'eps': info.get('trailingEps', 'N/A'),
-        'dividend_yield': info.get('dividendYield', 'N/A') * 100 if info.get('dividendYield') else 'N/A',
-        '52_week_high': info.get('fiftyTwoWeekHigh', 'N/A'),
-        '52_week_low': info.get('fiftyTwoWeekLow', 'N/A'),
-        'avg_volume': info.get('averageVolume', 'N/A'),
-    }
-    
-    return relevant_info
-
-def calculate_technical_indicators(df):
-    """
-    Calculate technical indicators for stock data
-    
-    Args:
-        df (pd.DataFrame): DataFrame with stock data
-        
-    Returns:
-        pd.DataFrame: DataFrame with additional technical indicators
-    """
-    # Make a copy to avoid modifying the original dataframe
-    data = df.copy()
-    
-    # Calculate moving averages
-    data['MA20'] = data['Close'].rolling(window=20).mean()
-    data['MA50'] = data['Close'].rolling(window=50).mean()
-    data['MA200'] = data['Close'].rolling(window=200).mean()
-    
-    # Calculate RSI (Relative Strength Index)
-    delta = data['Close'].diff()
-    gain = delta.where(delta > 0, 0).rolling(window=14).mean()
-    loss = -delta.where(delta < 0, 0).rolling(window=14).mean()
-    rs = gain / loss
-    data['RSI'] = 100 - (100 / (1 + rs))
-    
-    # Calculate MACD (Moving Average Convergence Divergence)
-    data['EMA12'] = data['Close'].ewm(span=12, adjust=False).mean()
-    data['EMA26'] = data['Close'].ewm(span=26, adjust=False).mean()
-    data['MACD'] = data['EMA12'] - data['EMA26']
-    data['Signal'] = data['MACD'].ewm(span=9, adjust=False).mean()
-    
-    # Calculate Bollinger Bands
-    data['MA20_std'] = data['Close'].rolling(window=20).std()
-    data['upper_band'] = data['MA20'] + (data['MA20_std'] * 2)
-    data['lower_band'] = data['MA20'] - (data['MA20_std'] * 2)
-    
-    return data
-
-def create_stock_chart(df, ticker):
-    """
-    Create an interactive chart for stock data using Plotly
-    
-    Args:
-        df (pd.DataFrame): DataFrame with stock data and indicators
         ticker (str): Stock ticker symbol
+        period (str, optional): Time period for data (e.g., "1y", "6mo", "1d"). Defaults to "1y".
         
     Returns:
-        go.Figure: Plotly figure object
+        pd.DataFrame: DataFrame with stock data and technical indicators
     """
-    # Create candlestick chart
-    fig = go.Figure(data=[go.Candlestick(x=df.index,
-                                         open=df['Open'],
-                                         high=df['High'],
-                                         low=df['Low'],
-                                         close=df['Close'],
-                                         name='Price')])
-    
-    # Add volume as bar chart
-    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume', yaxis='y2', opacity=0.3))
-    
-    # Add moving averages
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], mode='lines', name='20-day MA', line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA50'], mode='lines', name='50-day MA', line=dict(color='orange')))
-    fig.add_trace(go.Scatter(x=df.index, y=df['MA200'], mode='lines', name='200-day MA', line=dict(color='red')))
-    
-    # Add Bollinger Bands
-    fig.add_trace(go.Scatter(x=df.index, y=df['upper_band'], mode='lines', name='Upper Band', line=dict(color='rgba(0,128,0,0.3)')))
-    fig.add_trace(go.Scatter(x=df.index, y=df['lower_band'], mode='lines', name='Lower Band', line=dict(color='rgba(0,128,0,0.3)')))
-    
-    # Update layout
-    fig.update_layout(
-        title=f'{ticker} Stock Price and Indicators',
-        yaxis_title='Price',
-        xaxis_title='Date',
-        yaxis2=dict(
-            title='Volume',
-            overlaying='y',
-            side='right',
-            showgrid=False
-        ),
-        height=600,
-        legend=dict(orientation='h', y=1.05),
-        margin=dict(l=50, r=50, t=100, b=50),
-    )
-    
-    return fig
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period=period)
+        
+        if df.empty:
+            raise ValueError(f"No data returned for ticker {ticker}")
+            
+        # Calculate technical indicators
+        # Moving Averages
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['MA50'] = df['Close'].rolling(window=50).mean()
+        df['MA200'] = df['Close'].rolling(window=200).mean()
+        
+        # RSI (Relative Strength Index)
+        delta = df['Close'].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss
+        df['RSI'] = 100 - (100 / (1 + rs))
+        
+        # MACD (Moving Average Convergence Divergence)
+        exp1 = df['Close'].ewm(span=12, adjust=False).mean()
+        exp2 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['MACD'] = exp1 - exp2
+        df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+        
+        # Bollinger Bands
+        df['MA20'] = df['Close'].rolling(window=20).mean()
+        df['std'] = df['Close'].rolling(window=20).std()
+        df['upper_band'] = df['MA20'] + (df['std'] * 2)
+        df['lower_band'] = df['MA20'] - (df['std'] * 2)
+        
+        # Fill NaN values
+        df = df.fillna(method='bfill')
+        
+        return df
+    except Exception as e:
+        print(f"Error getting stock data: {str(e)}")
+        return pd.DataFrame()
 
-def analyze_with_llm(stock_info, technical_data, model_key=DEFAULT_MODEL, news=None):
+def analyze_with_llm(stock_info, df_with_indicators, model_key=DEFAULT_MODEL):
     """
-    Analyze stock data using the selected LLM model
+    Analyze stock data using a LLM via the Hugging Face API.
     
     Args:
-        stock_info (dict): General stock information
-        technical_data (pd.DataFrame): Technical indicators data
-        model_key (str): Key for the model to use from AVAILABLE_MODELS
-        news (list, optional): Recent news about the stock
+        stock_info (dict): Dictionary containing basic stock information
+        df_with_indicators (pandas.DataFrame): DataFrame with stock data and technical indicators
+        model_key (str): Key of the model to use from available_models
         
     Returns:
-        str: Analysis results from the LLM
+        str: Analysis of the stock by the LLM, or error message
     """
-    # Load the model if it's not already loaded
+    # Get available models
+    available_models = get_available_models()
+    
+    # Verify the Hugging Face API key is set
+    api_key = os.getenv("HUGGINGFACE_API_KEY")
+    if not api_key:
+        return "Error: Hugging Face API key not found. Please set up your API key in the .env file."
+    
     try:
-        load_model(model_key)
+        # Get model information
+        if model_key not in available_models:
+            return f"Error: Model {model_key} not found in available models."
+        model_info = available_models[model_key]
+        
+        # Prepare API endpoint
+        api_endpoint = model_info["api_endpoint"]
+        api_url = os.getenv("HUGGINGFACE_API_URL", f"https://api-inference.huggingface.co/models/{api_endpoint}")
+        
+        # Prepare the prompt based on the stock data
+        prompt = create_analysis_prompt(stock_info, df_with_indicators)
+        
+        # Call the Hugging Face API
+        headers = {"Authorization": f"Bearer {api_key}"}
+        payload = {"inputs": prompt}
+        
+        # Make the API request
+        response = requests.post(api_url, headers=headers, json=payload)
+        
+        # Process the response
+        if response.status_code != 200:
+            return f"Error: API request failed with status code {response.status_code}. Details: {response.text}"
+        
+        # Extract the generated text from the response
+        response_data = response.json()
+        
+        # Handle different response formats from different models
+        if isinstance(response_data, list) and len(response_data) > 0:
+            if isinstance(response_data[0], dict) and "generated_text" in response_data[0]:
+                # Format for models like Mistral and some others
+                analysis = response_data[0]["generated_text"]
+            else:
+                # Some other list format
+                analysis = str(response_data[0])
+        elif isinstance(response_data, dict):
+            if "generated_text" in response_data:
+                # Format for some models
+                analysis = response_data["generated_text"]
+            else:
+                # Some other dictionary format
+                analysis = str(response_data)
+        else:
+            # Fallback - use the raw response
+            analysis = str(response_data)
+        
+        # Clean up the response
+        if prompt in analysis:
+            # Remove the prompt from the beginning of the response if present
+            analysis = analysis[len(prompt):].strip()
+        
+        # If the response is empty, return an error
+        if not analysis:
+            return "Error: The model returned an empty response. Please try a different model."
+        
+        return analysis
+    
     except Exception as e:
-        return f"Error loading model: {str(e)}\n\nPlease try another model or check your system resources."
+        return f"Error during analysis: {str(e)}"
+
+def compare_stocks(tickers, period="1y"):
+    """
+    Compare multiple stocks based on technical indicators and performance.
     
+    Args:
+        tickers (list): List of stock ticker symbols
+        period (str, optional): Time period for data. Defaults to "1y".
+        
+    Returns:
+        pd.DataFrame: DataFrame with comparison metrics
+        dict: Dictionary with normalized price data for plotting
+        dict: Dictionary with performance metrics
+    """
+    comparison_data = {}
+    normalized_prices = {}
+    performance_metrics = {}
+    
+    try:
+        # Get data for each ticker
+        for ticker in tickers:
+            df = get_stock_data(ticker, period)
+            if df.empty:
+                continue
+                
+            # Store the normalized price data for plotting
+            start_price = df['Close'].iloc[0]
+            normalized_prices[ticker] = (df['Close'] / start_price) * 100
+                
+            # Calculate the latest metrics
+            latest = df.iloc[-1]
+            month_ago = df.iloc[-30] if len(df) > 30 else df.iloc[0]
+            
+            # Calculate returns
+            daily_return = (df['Close'].pct_change().mean() * 100)
+            monthly_return = ((latest['Close'] / month_ago['Close']) - 1) * 100
+            total_return = ((latest['Close'] / df['Close'].iloc[0]) - 1) * 100
+            
+            # Calculate volatility
+            volatility = df['Close'].pct_change().std() * 100 * (252 ** 0.5)  # Annualized
+            
+            # Calculate Sharpe Ratio (assuming risk-free rate of 4%)
+            risk_free_rate = 0.04
+            sharpe_ratio = (total_return/100 - risk_free_rate) / (volatility/100) if volatility != 0 else 0
+            
+            # Store the metrics
+            comparison_data[ticker] = {
+                'Current Price': latest['Close'],
+                'RSI': latest['RSI'],
+                'MACD': latest['MACD'],
+                'Above MA200': 'Yes' if latest['Close'] > latest['MA200'] else 'No',
+                'Daily Return %': daily_return,
+                'Monthly Return %': monthly_return,
+                'Total Return %': total_return,
+                'Volatility %': volatility,
+                'Sharpe Ratio': sharpe_ratio
+            }
+            
+            # Store performance metrics over time
+            performance_metrics[ticker] = {
+                'daily_returns': df['Close'].pct_change().dropna(),
+                'cumulative_returns': (df['Close'] / df['Close'].iloc[0]) - 1,
+                'volatility': df['Close'].pct_change().rolling(window=20).std() * (252 ** 0.5)
+            }
+            
+    except Exception as e:
+        print(f"Error comparing stocks: {str(e)}")
+        
+    # Convert to DataFrame
+    comparison_df = pd.DataFrame(comparison_data).T
+    
+    # Format the DataFrame
+    for col in ['RSI', 'MACD', 'Daily Return %', 'Monthly Return %', 'Total Return %', 'Volatility %', 'Sharpe Ratio']:
+        if col in comparison_df.columns:
+            comparison_df[col] = comparison_df[col].round(2)
+    
+    return comparison_df, normalized_prices, performance_metrics
+
+def suggest_portfolio_allocation(analysis_results, model_key=DEFAULT_MODEL):
+    """
+    Suggest a portfolio allocation based on the analyzed stocks.
+    
+    Args:
+        analysis_results (dict): Dictionary with stock symbols as keys and analysis results as values
+        model_key (str): Key of the model to use from available_models
+        
+    Returns:
+        str: Portfolio allocation suggestion from the model, or error message
+    """
+    # Get available models
+    available_models = get_available_models()
+    
+    # Verify the Hugging Face API key is set
+    api_key = os.getenv("HUGGINGFACE_API_KEY")
+    if not api_key:
+        return "Error: Hugging Face API key not found. Please set up your API key in the .env file."
+    
+    try:
+        # Validate parameters
+        if not analysis_results or len(analysis_results) < 2:
+            return "Error: Need at least 2 analyzed stocks to suggest a portfolio allocation."
+        
+        # Get model information
+        if model_key not in available_models:
+            return f"Error: Model {model_key} not found in available models."
+        model_info = available_models[model_key]
+        
+        # Create summary of each analyzed stock
+        stock_summaries = []
+        for symbol, analysis in analysis_results.items():
+            # Split the analysis into lines and grab the relevant sections
+            lines = analysis.split('\n')
+            recommendation_line = None
+            risk_factors = []
+            
+            # Look for recommendation and risk factors in the analysis
+            in_risk_section = False
+            for line in lines:
+                line = line.strip()
+                if "recommendation" in line.lower() and ("buy" in line.lower() or "sell" in line.lower() or "hold" in line.lower()):
+                    recommendation_line = line
+                elif "risk factor" in line.lower():
+                    in_risk_section = True
+                elif in_risk_section and line and not line.startswith('#'):
+                    risk_factors.append(line)
+                elif in_risk_section and (line.startswith('#') or "investment recommendation" in line.lower()):
+                    in_risk_section = False
+            
+            # Summarize the risks
+            risk_summary = '; '.join(risk_factors[:3]) if risk_factors else "No specific risks identified."
+            
+            # Create a summary for this stock
+            summary = f"{symbol}: {recommendation_line if recommendation_line else 'No clear recommendation'} | Risks: {risk_summary}"
+            stock_summaries.append(summary)
+        
+        # Prepare API endpoint
+        api_endpoint = model_info["api_endpoint"]
+        api_url = os.getenv("HUGGINGFACE_API_URL", f"https://api-inference.huggingface.co/models/{api_endpoint}")
+        
+        # Create prompt for portfolio allocation
+        prompt = f"""You are a financial advisor specializing in portfolio optimization for Indian stock markets.
+
+I have analyzed the following stocks:
+
+{chr(10).join(stock_summaries)}
+
+Based on these analyses, suggest an optimal portfolio allocation with specific percentages for each stock. 
+Maximize returns while managing risk appropriately. Explain your rationale for each allocation decision.
+Take into account the recommendations, risks, and potential of each stock.
+The percentages must sum to 100%.
+"""
+        
+        # Call the Hugging Face API
+        headers = {"Authorization": f"Bearer {api_key}"}
+        payload = {"inputs": prompt}
+        
+        # Make the API request
+        response = requests.post(api_url, headers=headers, json=payload)
+        
+        # Process the response
+        if response.status_code != 200:
+            return f"Error: API request failed with status code {response.status_code}. Details: {response.text}"
+        
+        # Extract the generated text from the response
+        response_data = response.json()
+        
+        # Handle different response formats from different models
+        if isinstance(response_data, list) and len(response_data) > 0:
+            if isinstance(response_data[0], dict) and "generated_text" in response_data[0]:
+                # Format for models like Mistral and some others
+                allocation = response_data[0]["generated_text"]
+            else:
+                # Some other list format
+                allocation = str(response_data[0])
+        elif isinstance(response_data, dict):
+            if "generated_text" in response_data:
+                # Format for some models
+                allocation = response_data["generated_text"]
+            else:
+                # Some other dictionary format
+                allocation = str(response_data)
+        else:
+            # Fallback - use the raw response
+            allocation = str(response_data)
+        
+        # Clean up the response
+        if prompt in allocation:
+            # Remove the prompt from the beginning of the response if present
+            allocation = allocation[len(prompt):].strip()
+        
+        # If the response is empty, return an error
+        if not allocation:
+            return "Error: The model returned an empty response. Please try a different model."
+        
+        return allocation
+    
+    except Exception as e:
+        return f"Error during portfolio allocation: {str(e)}"
+
+def create_analysis_prompt(stock_info, df_with_indicators):
+    """
+    Create a prompt for the AI model to analyze stock data.
+    
+    Args:
+        stock_info (dict): Dictionary containing basic stock information
+        df_with_indicators (pandas.DataFrame): DataFrame with stock data and technical indicators
+        
+    Returns:
+        str: Formatted prompt for the AI model
+    """
     # Extract the most recent data point
-    latest_data = technical_data.iloc[-1].to_dict()
-    
-    # Prepare a summary of the technical indicators
-    rsi_value = latest_data.get('RSI', 'N/A')
-    macd_value = latest_data.get('MACD', 'N/A')
-    signal_value = latest_data.get('Signal', 'N/A')
-    
-    current_price = latest_data.get('Close', 'N/A')
-    ma20 = latest_data.get('MA20', 'N/A')
-    ma50 = latest_data.get('MA50', 'N/A')
-    ma200 = latest_data.get('MA200', 'N/A')
-    
-    upper_band = latest_data.get('upper_band', 'N/A')
-    lower_band = latest_data.get('lower_band', 'N/A')
-    
-    # Calculate price trends
-    price_trend_30d = ((current_price / technical_data['Close'].iloc[-30]) - 1) * 100 if len(technical_data) >= 30 else 'N/A'
-    price_trend_90d = ((current_price / technical_data['Close'].iloc[-90]) - 1) * 100 if len(technical_data) >= 90 else 'N/A'
-    
-    # Format price trends as strings
-    price_trend_30d_str = f"{price_trend_30d:.2f}%" if isinstance(price_trend_30d, (int, float)) else price_trend_30d
-    price_trend_90d_str = f"{price_trend_90d:.2f}%" if isinstance(price_trend_90d, (int, float)) else price_trend_90d
-    
-    # Get model format
-    model_format = AVAILABLE_MODELS[model_key]["format"]
-    
-    # Base prompt content
-    prompt_content = f"""
+    try:
+        latest_data = df_with_indicators.iloc[-1].to_dict()
+        
+        # Prepare a summary of the technical indicators
+        rsi_value = latest_data.get('RSI', 'N/A')
+        macd_value = latest_data.get('MACD', 'N/A')
+        signal_value = latest_data.get('Signal', 'N/A')
+        
+        current_price = latest_data.get('Close', 'N/A')
+        ma20 = latest_data.get('MA20', 'N/A')
+        ma50 = latest_data.get('MA50', 'N/A')
+        ma200 = latest_data.get('MA200', 'N/A')
+        
+        upper_band = latest_data.get('upper_band', 'N/A')
+        lower_band = latest_data.get('lower_band', 'N/A')
+        
+        # Calculate price trends
+        price_trend_30d = ((current_price / df_with_indicators['Close'].iloc[-30]) - 1) * 100 if len(df_with_indicators) >= 30 else 'N/A'
+        price_trend_90d = ((current_price / df_with_indicators['Close'].iloc[-90]) - 1) * 100 if len(df_with_indicators) >= 90 else 'N/A'
+        
+        # Format price trends as strings
+        price_trend_30d_str = f"{price_trend_30d:.2f}%" if isinstance(price_trend_30d, (int, float)) else price_trend_30d
+        price_trend_90d_str = f"{price_trend_90d:.2f}%" if isinstance(price_trend_90d, (int, float)) else price_trend_90d
+        
+        # Create the prompt
+        prompt = f"""You are a financial analyst specializing in Indian stock markets (BSE and NSE). Provide a comprehensive financial analysis based on the data provided.
+
 Analyze the following stock:
 
 Stock Information:
-- Symbol: {stock_info['symbol']}
-- Name: {stock_info['name']}
-- Sector: {stock_info['sector']}
-- Industry: {stock_info['industry']}
-- Current Price: {stock_info['current_price']}
-- Market Cap: {stock_info['market_cap']}
-- P/E Ratio: {stock_info['pe_ratio']}
-- EPS: {stock_info['eps']}
-- Dividend Yield: {stock_info['dividend_yield']}
-- 52-Week High: {stock_info['52_week_high']}
-- 52-Week Low: {stock_info['52_week_low']}
-- Average Volume: {stock_info['avg_volume']}
+- Symbol: {stock_info.get('symbol', 'N/A')}
+- Name: {stock_info.get('name', 'N/A')}
+- Sector: {stock_info.get('sector', 'N/A')}
+- Industry: {stock_info.get('industry', 'N/A')}
+- Current Price: {stock_info.get('current_price', 'N/A')}
+- Market Cap: {stock_info.get('market_cap', 'N/A')}
+- P/E Ratio: {stock_info.get('pe_ratio', 'N/A')}
+- EPS: {stock_info.get('eps', 'N/A')}
+- Dividend Yield: {stock_info.get('dividend_yield', 'N/A')}
+- 52-Week High: {stock_info.get('52_week_high', 'N/A')}
+- 52-Week Low: {stock_info.get('52_week_low', 'N/A')}
+- Average Volume: {stock_info.get('avg_volume', 'N/A')}
 
 Technical Indicators:
 - Current Price: {current_price}
@@ -354,280 +503,9 @@ Provide a comprehensive analysis including:
 
 Focus on Indian market context and factors specific to the BSE/NSE markets.
 """
-    
-    # Format prompt based on model type
-    if model_format == "deepseek":
-        prompt = f"""<｜begin▁of▁conversation｜>
-<｜system｜>
-You are a financial analyst specializing in Indian stock markets (BSE and NSE). Provide a comprehensive financial analysis based on the data provided.
-</｜system｜>
-
-<｜user｜>
-{prompt_content}
-</｜user｜>
-
-<｜assistant｜>
-"""
-    elif model_format == "llama":
-        prompt = f"""<s>[INST] <<SYS>>
-You are a financial analyst specializing in Indian stock markets (BSE and NSE). Provide a comprehensive financial analysis based on the data provided.
-<</SYS>>
-
-{prompt_content} [/INST]
-"""
-    elif model_format == "zephyr":
-        prompt = f"""<|system|>
-You are a financial analyst specializing in Indian stock markets (BSE and NSE). Provide a comprehensive financial analysis based on the data provided.
-</|system|>
-
-<|user|>
-{prompt_content}
-</|user|>
-
-<|assistant|>
-"""
-    else:  # default format
-        prompt = f"""You are a financial analyst specializing in Indian stock markets (BSE and NSE). Provide a comprehensive financial analysis based on the data provided.
-
-{prompt_content}
-"""
-    
-    try:
-        # Get device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Tokenize input
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        
-        # Generate the response
-        with torch.no_grad():
-            outputs = model.generate(
-                inputs.input_ids,
-                max_new_tokens=1000,  # Reduced for faster generation and to fit in memory constraints
-                temperature=0.3,
-                top_p=0.95,
-                do_sample=True,
-            )
-        
-        # Decode the generated response
-        full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Extract the model's response based on format
-        if model_format == "deepseek":
-            # Extract just the assistant's response part
-            if "<｜assistant｜>" in full_response:
-                assistant_response = full_response.split("<｜assistant｜>")[1].split("</｜assistant｜>")[0].strip()
-            else:
-                assistant_response = full_response
-        elif model_format == "llama":
-            # For Llama models, we typically just need to take everything after the prompt
-            assistant_response = full_response.split(prompt_content)[1].strip()
-            if "[/INST]" in assistant_response:
-                assistant_response = assistant_response.split("[/INST]")[1].strip()
-        elif model_format == "zephyr":
-            # Extract assistant's response for Zephyr model
-            if "<|assistant|>" in full_response:
-                assistant_response = full_response.split("<|assistant|>")[1].split("</|assistant|>")[0].strip()
-            else:
-                assistant_response = full_response
-        else:
-            # For default format, just take everything after the prompt
-            assistant_response = full_response.split(prompt_content)[-1].strip()
-        
-        # Failsafe: If parsing fails, return the full response
-        if not assistant_response:
-            assistant_response = full_response
-        
-        return assistant_response
+        return prompt
     except Exception as e:
-        return f"Error in analysis: {str(e)}"
-
-def compare_stocks(tickers, period="1y"):
-    """
-    Compare multiple stocks based on key metrics
-    
-    Args:
-        tickers (list): List of stock ticker symbols
-        period (str): Period to fetch data for
-        
-    Returns:
-        tuple: (comparison_df, normalized_price_df, performance_metrics)
-    """
-    comparison_data = {}
-    normalized_prices = pd.DataFrame()
-    performance_metrics = {}
-    
-    for ticker in tickers:
-        if not validate_ticker(ticker):
-            continue
-            
-        # Get stock information
-        stock_info = get_stock_info(ticker)
-        
-        # Get historical data
-        hist_data = get_stock_data(ticker, period=period)
-        
-        if hist_data.empty:
-            continue
-            
-        # Calculate performance metrics
-        start_price = hist_data['Close'].iloc[0]
-        end_price = hist_data['Close'].iloc[-1]
-        total_return = ((end_price / start_price) - 1) * 100
-        
-        # Calculate volatility (standard deviation of daily returns)
-        daily_returns = hist_data['Close'].pct_change().dropna()
-        volatility = daily_returns.std() * (252 ** 0.5) * 100  # Annualized volatility
-        
-        # Calculate Sharpe ratio (assuming risk-free rate of 5% for Indian markets)
-        risk_free_rate = 0.05
-        sharpe_ratio = (daily_returns.mean() * 252 - risk_free_rate) / (daily_returns.std() * (252 ** 0.5))
-        
-        # Store the metrics
-        performance_metrics[ticker] = {
-            'Total Return (%)': total_return,
-            'Annualized Volatility (%)': volatility,
-            'Sharpe Ratio': sharpe_ratio,
-            'Current Price': end_price,
-            'Market Cap': stock_info.get('market_cap', 'N/A'),
-            'P/E Ratio': stock_info.get('pe_ratio', 'N/A'),
-            'Dividend Yield (%)': stock_info.get('dividend_yield', 'N/A'),
-        }
-        
-        # Add normalized prices for comparison chart
-        normalized_prices[ticker] = hist_data['Close'] / start_price * 100
-    
-    # Convert performance metrics to DataFrame
-    comparison_df = pd.DataFrame(performance_metrics).T
-    
-    return comparison_df, normalized_prices, performance_metrics
-
-def suggest_portfolio_allocation(tickers, analysis_results, model_key=DEFAULT_MODEL):
-    """
-    Suggest an optimal portfolio allocation based on LLM analysis
-    
-    Args:
-        tickers (list): List of stock ticker symbols
-        analysis_results (dict): Dictionary with LLM analysis for each ticker
-        model_key (str): Key for the model to use from AVAILABLE_MODELS
-        
-    Returns:
-        str: Suggested portfolio allocation and strategy
-    """
-    # Load the model if it's not already loaded
-    try:
-        load_model(model_key)
-    except Exception as e:
-        return f"Error loading model: {str(e)}\n\nPlease try another model or check your system resources."
-    
-    # Prepare a prompt with information about all stocks
-    stocks_info = "\n\n".join([
-        f"Stock: {ticker}\n{analysis}" 
-        for ticker, analysis in analysis_results.items()
-    ])
-    
-    # Base prompt content
-    prompt_content = f"""
-As a portfolio manager specializing in Indian markets, recommend an optimal allocation for a portfolio consisting of these stocks:
-
-{stocks_info}
-
-Provide:
-1. Recommended percentage allocation for each stock
-2. Rationale for each allocation
-3. Overall portfolio strategy
-4. Risk assessment for the portfolio
-5. Suggestions for any additional diversification needed
-
-Focus on maximizing returns while managing risk appropriately.
-"""
-    
-    # Get model format
-    model_format = AVAILABLE_MODELS[model_key]["format"]
-    
-    # Format prompt based on model type
-    if model_format == "deepseek":
-        prompt = f"""<｜begin▁of▁conversation｜>
-<｜system｜>
-You are a portfolio manager specializing in Indian stock markets. Provide detailed allocation advice for maximizing returns while managing risk.
-</｜system｜>
-
-<｜user｜>
-{prompt_content}
-</｜user｜>
-
-<｜assistant｜>
-"""
-    elif model_format == "llama":
-        prompt = f"""<s>[INST] <<SYS>>
-You are a portfolio manager specializing in Indian stock markets. Provide detailed allocation advice for maximizing returns while managing risk.
-<</SYS>>
-
-{prompt_content} [/INST]
-"""
-    elif model_format == "zephyr":
-        prompt = f"""<|system|>
-You are a portfolio manager specializing in Indian stock markets. Provide detailed allocation advice for maximizing returns while managing risk.
-</|system|>
-
-<|user|>
-{prompt_content}
-</|user|>
-
-<|assistant|>
-"""
-    else:  # default format
-        prompt = f"""You are a portfolio manager specializing in Indian stock markets. Provide detailed allocation advice for maximizing returns while managing risk.
-
-{prompt_content}
-"""
-    
-    try:
-        # Get device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
-        # Tokenize input
-        inputs = tokenizer(prompt, return_tensors="pt").to(device)
-        
-        # Generate the response
-        with torch.no_grad():
-            outputs = model.generate(
-                inputs.input_ids,
-                max_new_tokens=1000,  # Reduced for faster generation
-                temperature=0.3,
-                top_p=0.95,
-                do_sample=True,
-            )
-        
-        # Decode the generated response
-        full_response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        
-        # Extract the model's response based on format
-        if model_format == "deepseek":
-            # Extract just the assistant's response part
-            if "<｜assistant｜>" in full_response:
-                assistant_response = full_response.split("<｜assistant｜>")[1].split("</｜assistant｜>")[0].strip()
-            else:
-                assistant_response = full_response
-        elif model_format == "llama":
-            # For Llama models, we typically just need to take everything after the prompt
-            assistant_response = full_response.split(prompt_content)[1].strip()
-            if "[/INST]" in assistant_response:
-                assistant_response = assistant_response.split("[/INST]")[1].strip()
-        elif model_format == "zephyr":
-            # Extract assistant's response for Zephyr model
-            if "<|assistant|>" in full_response:
-                assistant_response = full_response.split("<|assistant|>")[1].split("</|assistant|>")[0].strip()
-            else:
-                assistant_response = full_response
-        else:
-            # For default format, just take everything after the prompt
-            assistant_response = full_response.split(prompt_content)[-1].strip()
-        
-        # Failsafe: If parsing fails, return the full response
-        if not assistant_response:
-            assistant_response = full_response
-        
-        return assistant_response
-    except Exception as e:
-        return f"Error in portfolio allocation suggestion: {str(e)}" 
+        # Return a simple prompt if the detailed one can't be created
+        return f"""You are a financial analyst specializing in Indian stock markets (BSE and NSE). 
+Analyze the stock with symbol {stock_info.get('symbol', 'N/A')} based on the available information.
+Provide an investment recommendation (Buy, Hold, or Sell) with rationale.""" 

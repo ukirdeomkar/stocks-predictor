@@ -5,6 +5,17 @@ import plotly.express as px
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
+import sys
+import importlib
+
+# Fix for torch path issues with Streamlit's hot-reloading - with proper existence check
+try:
+    # Only try to reload if the module exists
+    if 'torch.classes' in sys.modules and sys.modules['torch.classes'] is not None:
+        importlib.reload(sys.modules['torch.classes'])
+except (ModuleNotFoundError, KeyError, AttributeError):
+    # Silently continue if module can't be found or reloaded
+    pass
 
 # Import utility functions
 from utils import (
@@ -22,6 +33,22 @@ from utils import (
 
 # Load environment variables
 load_dotenv()
+
+# Initialize session state variables if they don't exist
+if 'selected_model' not in st.session_state:
+    st.session_state.selected_model = "phi-2"  # Default model
+if 'model_loaded' not in st.session_state:
+    st.session_state.model_loaded = False
+    
+# Always use API - no toggle needed
+st.session_state.use_api = True
+
+# Initialize session state variables
+if "use_api" not in st.session_state:
+    st.session_state.use_api = True
+
+if "analysis_results" not in st.session_state:
+    st.session_state.analysis_results = {}
 
 # App title and description
 st.set_page_config(
@@ -58,6 +85,23 @@ st.markdown("""
         border-radius: 0.5rem;
         margin-top: 1rem;
         margin-bottom: 1rem;
+        color: #263238 !important; 
+        font-weight: normal !important;
+    }
+    .recommendation-box p {
+        color: #263238 !important;
+        margin-bottom: 0.8rem;
+    }
+    .recommendation-box h1, .recommendation-box h2, .recommendation-box h3, 
+    .recommendation-box h4, .recommendation-box h5 {
+        color: #0D47A1 !important;
+        margin-top: 1rem;
+        margin-bottom: 0.5rem;
+    }
+    .recommendation-box ul, .recommendation-box ol {
+        color: #263238 !important;
+        margin-bottom: 0.8rem;
+        padding-left: 1.5rem;
     }
     /* Streamlit radio button styling */
     div.stRadio > div {
@@ -82,10 +126,6 @@ st.markdown('Analyze BSE and NSE stocks with AI-powered insights to maximize you
 
 # Get available models
 available_models = get_available_models()
-
-# Initialize session state for selected model
-if 'selected_model' not in st.session_state:
-    st.session_state.selected_model = "phi-2"  # Default model
 
 # Model configuration in sidebar
 st.sidebar.markdown('## AI Model Settings')
@@ -149,14 +189,38 @@ with st.sidebar.expander("About Selected Model", expanded=False):
     The first analysis may take time to download and load the model.
     """)
 
-# Pre-load model option
-if st.sidebar.button("Pre-load Selected Model"):
-    with st.spinner(f"Loading {selected_model} model... This may take a few minutes depending on your hardware..."):
-        try:
-            load_model(selected_model)
-            st.sidebar.success("✅ Model loaded successfully!")
-        except Exception as e:
-            st.sidebar.error(f"❌ Error loading model: {str(e)}")
+# Model execution options
+st.sidebar.markdown("### Model Execution Options")
+
+# Check if Hugging Face API key is available
+hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
+api_available = hf_api_key is not None and hf_api_key.strip() != ""
+
+if api_available:
+    st.sidebar.success("✅ Using Hugging Face API for analysis")
+    st.sidebar.info("API analysis is faster and requires less resources")
+else:
+    # API key not available
+    st.sidebar.error(
+        "❌ No Hugging Face API key found. You need to set up an API key to use the app."
+    )
+    
+    # Show instructions for setting up API key
+    with st.sidebar.expander("How to set up your API key", expanded=True):
+        st.markdown("""
+        1. Create a free account at [Hugging Face](https://huggingface.co/)
+        2. Generate an API key from [your settings page](https://huggingface.co/settings/tokens)
+        3. Create a `.env` file in the app's directory with:
+           ```
+           HUGGINGFACE_API_KEY=your_api_key_here
+           ```
+        4. Restart the application
+        """)
+    
+    # Add a link to get an API key
+    st.sidebar.markdown(
+        "[Get a free Hugging Face API key](https://huggingface.co/settings/tokens)"
+    )
 
 # Sidebar for stock selection and controls
 st.sidebar.markdown('## Stock Selection')
@@ -301,13 +365,60 @@ with tab1:
                 # AI Analysis section
                 st.markdown('<h3 class="sub-header">AI Analysis</h3>', unsafe_allow_html=True)
                 
-                st.info(f"Using model: **{selected_model}** - {available_models[selected_model]['description']}")
+                st.info(f"Using model: **{selected_model}** - {available_models[selected_model]['description']} (via Hugging Face API)")
                 
-                if st.button("Generate AI Analysis"):
-                    with st.spinner(f"Generating analysis using {selected_model}... This may take a few minutes on the first run as the model loads..."):
-                        analysis = analyze_with_llm(stock_info, df_with_indicators, model_key=selected_model)
-                        st.markdown(f'<div class="recommendation-box">{analysis}</div>', 
-                                  unsafe_allow_html=True)
+                # Check if Hugging Face API key is available
+                hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
+                api_available = hf_api_key is not None and hf_api_key.strip() != ""
+
+                if not api_available:
+                    st.error("❌ No Hugging Face API key found. You must set up an API key to use the analysis features.")
+                    st.markdown("""
+                    To set up your API key:
+                    1. Create a free account at [Hugging Face](https://huggingface.co/)
+                    2. Generate an API key from [your settings page](https://huggingface.co/settings/tokens)
+                    3. Create a `.env` file in the app's directory with: `HUGGINGFACE_API_KEY=your_api_key_here`
+                    4. Restart the application
+                    """)
+                else:
+                    if st.button("Generate AI Analysis"):
+                        with st.spinner(f"Generating analysis using {selected_model} via Hugging Face API..."):
+                            try:
+                                # Proceed with analysis
+                                analysis = analyze_with_llm(
+                                    stock_info, 
+                                    df_with_indicators, 
+                                    model_key=selected_model
+                                )
+                                
+                                # Check if analysis was successful
+                                if analysis and not analysis.startswith("Error"):
+                                    # Store the analysis in session state for portfolio allocation
+                                    if 'analysis_results' not in st.session_state:
+                                        st.session_state.analysis_results = {}
+                                    st.session_state.analysis_results[ticker] = analysis
+                                    
+                                    # Create a container with proper styling for the analysis
+                                    analysis_container = st.container()
+                                    with analysis_container:
+                                        st.markdown("<div class='recommendation-box'>", unsafe_allow_html=True)
+                                        
+                                        # Format the analysis text to ensure proper rendering
+                                        formatted_analysis = analysis.replace("\n", "<br>")
+                                        
+                                        # Handle potential Markdown formatting in the analysis
+                                        # First, escape any HTML tags in the analysis that aren't our <br> tags
+                                        import re
+                                        formatted_analysis = re.sub(r'<(?!br>|/br>)', '&lt;', formatted_analysis)
+                                        formatted_analysis = re.sub(r'(?<!<br)>', '&gt;', formatted_analysis)
+                                        
+                                        # Now render with proper formatting
+                                        st.markdown(f"{formatted_analysis}", unsafe_allow_html=True)
+                                        st.markdown("</div>", unsafe_allow_html=True)
+                                else:
+                                    st.error(f"Error during analysis: {analysis}")
+                            except Exception as e:
+                                st.error(f"An error occurred: {str(e)}")
         else:
             st.error(f"Invalid ticker symbol: {ticker}. Please ensure you're using the correct format (e.g., RELIANCE.BO for BSE or RELIANCE.NS for NSE)")
     else:
@@ -418,33 +529,90 @@ with tab3:
                 
                 if st.button("Generate Portfolio Recommendations"):
                     with st.spinner(f"Analyzing your portfolio using {selected_model}... This may take a few minutes..."):
-                        # Gather analysis results for each stock
-                        analysis_results = {}
-                        progress_bar = st.progress(0)
-                        
-                        for i, ticker in enumerate(valid_portfolio_tickers):
-                            # Update progress
-                            progress_bar.progress((i / len(valid_portfolio_tickers)))
+                        try:
+                            # Import torch only when needed to avoid module path issues
+                            import torch
                             
-                            # Get stock data and calculate indicators
-                            stock_info = get_stock_info(ticker)
-                            df = get_stock_data(ticker, period='1y')
-                            df_with_indicators = calculate_technical_indicators(df)
+                            # Try to load the model first
+                            load_successful = load_model(selected_model)
                             
-                            # Get AI analysis
-                            analysis = analyze_with_llm(stock_info, df_with_indicators, model_key=selected_model)
-                            analysis_results[ticker] = analysis
-                        
-                        # Complete progress
-                        progress_bar.progress(1.0)
-                        
-                        # Get portfolio allocation suggestion
-                        allocation_suggestion = suggest_portfolio_allocation(
-                            valid_portfolio_tickers, analysis_results, model_key=selected_model
-                        )
-                        
-                        st.markdown(f'<div class="recommendation-box">{allocation_suggestion}</div>', 
-                                  unsafe_allow_html=True)
+                            if not load_successful:
+                                st.error(f"Failed to load the model {selected_model}. Please try a different model or restart the application.")
+                            else:
+                                # Gather analysis results for each stock
+                                analysis_results = {}
+                                progress_bar = st.progress(0)
+                                analysis_errors = []
+                                
+                                for i, ticker in enumerate(valid_portfolio_tickers):
+                                    # Update progress
+                                    progress_bar.progress((i / len(valid_portfolio_tickers)))
+                                    
+                                    try:
+                                        # Get stock data and calculate indicators
+                                        stock_info = get_stock_info(ticker)
+                                        df = get_stock_data(ticker, period='1y')
+                                        df_with_indicators = calculate_technical_indicators(df)
+                                        
+                                        # Get AI analysis
+                                        analysis = analyze_with_llm(
+                                            stock_info, 
+                                            df_with_indicators, 
+                                            model_key=selected_model,
+                                            use_api=st.session_state.use_api
+                                        )
+                                        
+                                        if analysis and not analysis.startswith("Error"):
+                                            analysis_results[ticker] = analysis
+                                        else:
+                                            analysis_errors.append(f"Could not analyze {ticker}: {analysis}")
+                                    except Exception as e:
+                                        analysis_errors.append(f"Error analyzing {ticker}: {str(e)}")
+                                
+                                # Complete progress
+                                progress_bar.progress(1.0)
+                                
+                                # Show any errors that occurred during analysis
+                                if analysis_errors:
+                                    st.warning(f"Some stocks could not be analyzed: {', '.join(analysis_errors)}")
+                                
+                                if analysis_results:
+                                    # Get portfolio allocation suggestion
+                                    try:
+                                        allocation_suggestion = suggest_portfolio_allocation(
+                                            list(analysis_results.keys()), 
+                                            analysis_results, 
+                                            model_key=selected_model,
+                                            use_api=st.session_state.use_api
+                                        )
+                                        
+                                        if allocation_suggestion and not allocation_suggestion.startswith("Error"):
+                                            # Create a container with proper styling for the portfolio recommendation
+                                            portfolio_container = st.container()
+                                            with portfolio_container:
+                                                st.markdown("<div class='recommendation-box'>", unsafe_allow_html=True)
+                                                
+                                                # Format the analysis text to ensure proper rendering
+                                                formatted_suggestion = allocation_suggestion.replace("\n", "<br>")
+                                                
+                                                # Handle potential Markdown formatting in the analysis
+                                                import re
+                                                formatted_suggestion = re.sub(r'<(?!br>|/br>)', '&lt;', formatted_suggestion)
+                                                formatted_suggestion = re.sub(r'(?<!<br)>', '&gt;', formatted_suggestion)
+                                                
+                                                # Now render with proper formatting
+                                                st.markdown(f"{formatted_suggestion}", unsafe_allow_html=True)
+                                                st.markdown("</div>", unsafe_allow_html=True)
+                                        else:
+                                            st.error(f"Error generating portfolio recommendations: {allocation_suggestion}")
+                                    except Exception as e:
+                                        st.error(f"Error during portfolio optimization: {str(e)}")
+                                else:
+                                    st.error("Could not analyze any of the selected stocks. Please try different stocks or another model.")
+                        except ImportError:
+                            st.error("❌ PyTorch is not properly installed. Please check your environment setup.")
+                        except Exception as e:
+                            st.error(f"An error occurred: {str(e)}. Please try a different model or restart the application.")
     else:
         st.info("Enter the stock symbols for your portfolio to get optimization recommendations")
 
@@ -569,4 +737,44 @@ with tab4:
 st.markdown("""
 ---
 Made with ❤️ using Streamlit, yfinance, and open-source LLMs | Indian Stock Market Analyzer
-""") 
+""")
+
+# Check for analysis_results to show portfolio allocation section
+if 'analysis_results' in st.session_state and st.session_state.analysis_results:
+    st.markdown('<h3 class="sub-header">Portfolio Allocation Suggestion</h3>', unsafe_allow_html=True)
+    
+    # Check if Hugging Face API key is available
+    hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
+    api_available = hf_api_key is not None and hf_api_key.strip() != ""
+    
+    if not api_available:
+        st.error("❌ No Hugging Face API key found. You must set up an API key to use the portfolio allocation feature.")
+    else:
+        if st.button("Generate Portfolio Allocation Suggestion"):
+            with st.spinner(f"Generating portfolio allocation using {selected_model} via Hugging Face API..."):
+                try:
+                    # Get the portfolio allocation suggestion
+                    portfolio_allocation = suggest_portfolio_allocation(
+                        st.session_state.analysis_results,
+                        model_key=selected_model
+                    )
+                    
+                    # Check if portfolio allocation was successful
+                    if portfolio_allocation and not portfolio_allocation.startswith("Error"):
+                        st.success("Portfolio Allocation Suggestion")
+                        st.markdown("<div class='allocation-box'>", unsafe_allow_html=True)
+                        
+                        # Format the portfolio allocation text
+                        formatted_allocation = portfolio_allocation.replace("\n", "<br>")
+                        
+                        # Handle potential Markdown formatting
+                        import re
+                        formatted_allocation = re.sub(r'<(?!br>|/br>)', '&lt;', formatted_allocation)
+                        formatted_allocation = re.sub(r'(?<!<br)>', '&gt;', formatted_allocation)
+                        
+                        st.markdown(f"{formatted_allocation}", unsafe_allow_html=True)
+                        st.markdown("</div>", unsafe_allow_html=True)
+                    else:
+                        st.error(f"Error generating portfolio allocation: {portfolio_allocation}")
+                except Exception as e:
+                    st.error(f"An error occurred: {str(e)}") 
